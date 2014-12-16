@@ -12,15 +12,33 @@ class(mset)
 
 #Read signal intensities data
 ```{r}
-gmset=readGEORawFile("GSE42865_signal_intensities.txt",Uname="Signal_A",Mname="Signal_B",sep="\t")
+path <- getGEOSuppFiles('GSE42865')
+print(path)
+```
+
+```{r}
+filepath <- row.names(path)[2]
+unzipped_filepath <- gsub("[.]gz$", "", filepath)
+gunzip(filepath,destname=unzipped_filepath)
+gmset=readGEORawFile(unzipped_filepath,Uname="Signal_A",Mname="Signal_B",sep="\t")
 class(gmset)
+```
+
+Merge `pData` into raw intensity data
+```{r}
+pd <- pData(mset)
+m <- match(rownames(pData(gmset)), rownames(pd))
+pData(gmset) <- pd[m,]
 ```
 
 #What is the difference?
 Basically, they are the same. Both can be applied to most of the functions listed in this reporte preprocessMethod() can tell us what method is applied for both data (it is useful for GRChannelSet, too)
 
 
-Difference: 1. the value is slightly different, even though the preprocessed method is the same. 2. data from signal intensities data do not contain good pData. 3. In their matrix, the order of samples and probes is different.
+Difference: 
+  1. the value is slightly different, even though the preprocessed method is the same.  
+  2. data from signal intensities data do not contain good pData.  
+  3. In their matrix, the order of samples and probes is different.  
 
 #Preprocessing
 We can check what kind of preprocess method is applied for the data.
@@ -34,9 +52,35 @@ Only preprocessQuantile() can be applied to signal intensities data.
 qgmset=preprocessQuantile(gmset)
 ```
 
+#Phenotype data
+DESCRIBE THE DATA HERE
+
+```{r}
+pd <- pData(qgmset)
+cols <- grep("characteristics_ch1", colnames(pd))
+tab <- pd[,cols]
+
+extract <- function(x) {
+  tmp <- strsplit(as.character(x), split=": ")
+  colname <- tmp[[1]][1]
+  values <- sapply(tmp,"[",2)
+  list(colname, values)
+}
+tmp <- lapply(tab, extract)
+tab2 <- as.data.frame(sapply(tmp, "[[", 2))
+names(tab2) <- sapply(tmp, "[[", 1)
+pData(qgmset) <- DataFrame(cbind(pd, tab2))
+```
+
+```{r}
+pd <- pData(qgmset)
+table(pd$gender)
+table(pd$health, pd$cell)
+```
+
 #Data visualization(Multi-dimension scaling plots)
 ```{r}
-mdsPlot(getBeta(mset)[,1:4],numPositions=1000,sampGroups=c('A','A','B','B'),sampNames=c('A_1','A_2','B_1','B_2'))
+mdsPlot(getM(qgmset),numPositions=1000,sampGroups=pd$health,sampNames=pd$health)
 ```
 
 #Data visualization(Sample Distance (Euclidean))
@@ -50,32 +94,15 @@ hc<-hclust(sampleDists)
 heatmap.2(sampleDistMatrix,Rowv=as.dendrogram(hc),symm=TRUE,trace='none',col=colors,margins=c(2,10),labCol=FALSE)
 ```
 
-#Data visualization(Sample Distance (Poisson))
-This is not successful. The codes should be something like below, but the graph is wrong. I think the reason is that the input data is not in suitable format. Also, there is something wrong with the colname and rowname.
-```
-library("PoiClaClu")
-poisd <- PoissonDistance(t(getBeta(mset)))
-
-library(gplots)
-library('RColorBrewer')
-samplePoisDistMatrix <- as.matrix( poisd$dd )
-rownames(samplePoisDistMatrix) <-c(...)
-colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
-hc <- hclust(poisd$dd)
-heatmap.2( samplePoisDistMatrix, Rowv=as.dendrogram(hc),
-          symm=TRUE, trace="none", col=colors,
-		            margins=c(2,10), labCol=FALSE )
-```
-
-#Data visualization (PCA plot)
-```{r}
-library(DESeq2)
-plotPCA(mset,intgroup=c('title'))
-```
-
 #Differentially Methylated Position
 ```{r}
-dmp<-dmpFinder(getM(mset[1:500,1:4]),pheno=c('A','A','B','B'),type='continuous')
+samplesToKeep <- grepl("EBV", pd$cell)
+gmset2 <- qgmset[,samplesToKeep]
+pData(gmset2)$status <- ifelse(pData(gmset2)$health == "Healthy donor", "control", 
+                               ifelse(pData(gmset2)$health == "Werner Syndrome", "werner", "progeria"))
+dmp<-dmpFinder(getM(gmset2)[,pData(gmset2)$status != "werner"], 
+               pheno=pData(gmset2)$status[pData(gmset2)$status != "werner"],
+               type='categorical')
 ```
 
 #Find the Block
@@ -107,9 +134,6 @@ intersect(filter,which(A!='Inf'))->filter
 ma.plot(A[filter],M[filter],cex=1)
 ```
 
-#Diagnostic Plots(Dispersion plot)
-Seems unable to do that yet. The existed function can not work on the data class in minfi. I need to write a new function, and it takes time.
-
 #Diagnostic Plots(histogram)
 ```{r}
 hist(dmp$qval,breaks=20,col="grey50", border="white")
@@ -140,3 +164,6 @@ gtrack <- GenomeAxisTrack()
 itrack <- IdeogramTrack(genome = gen, chromosome = chr)                     
 plotTracks(list(itrack, gtrack, atrack))
 ```
+
+#Epiviz
+Aim for [this](http://epiviz.cbcb.umd.edu/?ws=WZCPGTd7Duv&seqName=chr11&start=130099272&end=133637378&settings=default&)
